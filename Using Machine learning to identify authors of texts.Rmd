@@ -1,0 +1,411 @@
+---
+title: "Using Machine Learning to identify authors of texts"
+author: Jaspreet Sandhu
+date: 10th Feb, 2016
+output:
+  revealjs::revealjs_presentation:
+    # slide_level: 1
+    theme: night
+    highlight: zenburn
+    center: true
+    transition: slide
+    css: jasp.css
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+setwd("/Users/Jaspreet/Documents/R_workspace/NLP/SciFi")
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(randomForest)
+library(caret)
+library(lattice)
+```
+
+##Defining the mission statement
+
+- Is it possible for a model to learn and identify an author's unique style?
+
+- Robert Galbraith a.k.a. J.K. Rowling controversy
+
+- Revealed by Sunday Times, which sought the assistance of Peter Millican of Oxford University and Patrick Juola of Duquesne University for an authorial analysis.
+
+- Archaeologists and historians regularly recover and attempt to identify unattributed texts
+
+#Quantifying the Human element
+##
+
+Language is a set of choices, and speakers and writers tend to fall into habitual, or at least common, choices.
+
+- The universe was born around 13 billion years ago in a big bang.
+
+- The universe was created approximately 13 billion years ago in the big bang.
+
+- The big bang gave rise to the universe as we know today 13 billion years ago.
+
+and so on...
+
+##
+
+- Much of this apparently free variation is rather static at an individual level. 
+
+- A statistical model of these prefered choices can be made by studying examples of texts authored by a person.
+
+- Dates back to logician Augustus de Morgan (de morgan's law) who proposed that average word length could be used to settle questions of disputed authorship.
+
+- Mosteller and Wallace (1960's) studied writing styles of the Federalist Papers showing that Alexander Hamilton never used the word "whilst" and James Madison never used the word "while." Also, they both used the word "by," but Madison consistently used it twice as often.
+
+# Getting data and preparing it for analysis
+##
+###Training Data
+
+- The Hanging Stranger by Philip K. Dick
+
+- The Lost world by Arthur Conan Doyle
+
+- The Poison Belt by Arthur Conan Doyle
+
+- Silence of the Lambs by Thomas Harris
+
+- Harry Potter and the Half Blood Prince by J.K. Rowling
+
+- The Casual Vacancy by J.K. Rowling
+
+- The Time Machine by H.G. Wells
+
+- War of the Worlds by H.G. Wells
+
+##
+####Corpus of text
+```{r, message=FALSE, warning=FALSE, tidy=TRUE}
+tr_docs <- Corpus(DirSource(
+  "/Users/Jaspreet/Documents/R_workspace/NLP/SciFi/train"))
+```
+####Homogenizing the words
+```{r, message=FALSE, warning=FALSE}
+tr_docs <- tm_map(tr_docs, tolower)
+tr_docs <- tm_map(tr_docs, PlainTextDocument)
+```
+
+#### Splitting each book into chapters
+```{r, message=FALSE, warning=FALSE}
+for(i in 1:length(tr_docs)){
+  tr_docs[[i]]$content <- paste(tr_docs[[i]]$content, collapse = " ")
+  tr_docs[[i]]$content <- strsplit(tr_docs[[i]]$content, "(?: +\\*){5}| +chapter ?[a-z]* *")
+  tr_docs[[i]]$content <- unlist(tr_docs[[i]]$content)
+  tr_docs[[i]]$content <- as.list(tr_docs[[i]]$content)
+}
+```
+
+##
+####Getting the text down to basic word forms
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+tr_docs <- tm_map(tr_docs, removePunctuation)
+tr_docs <- tm_map(tr_docs, removeNumbers)
+tr_docs <- tm_map(tr_docs, removeWords, c("the", "a"))
+tr_docs <- tm_map(tr_docs, stripWhitespace)
+tr_docs <- tm_map(tr_docs, stemDocument)
+tr_docs <- tm_map(tr_docs, PlainTextDocument)
+
+for(i in 1:length(tr_docs)){
+  tr_docs[[i]]$content <- unlist(tr_docs[[i]]$content)
+  tr_docs[[i]]$content <- as.list(tr_docs[[i]]$content)
+}
+```
+
+##
+###Now that the data is ready to extract features from:
+- Identify the features which will be important in differentiating authors
+
+- Nouns, Verbs, Adjectives?
+
+- Stopwords (have, on, which, who, by, her..)?
+
+##
+
+| Verbs/nouns/adjectives | Stopwords |
+| ------------- | ------------- |
+| Vary more with the topic of the book/article than the author's personal style     | highly choice/habit based and offer more flexibility for an author's style |
+| Flexibility on synonyms, endings can also offer good features     | Large potential to subconsciously use the same patterns irrespective of the story/article.  |
+
+##
+####Getting stopword count from each chapter
+```{r, echo=TRUE}
+numwords <- function(what,where) {
+  g1 <- gregexpr(paste('[[:blank:]]+[[:punct:]]*',what,'[[:punct:]]*[[:blank:]]+',sep=''),where,ignore.case=TRUE)
+   if (g1[[1]][1]==-1) 0L
+  else length(g1[[1]])
+}
+
+countwords <- function(book) {
+  sw <- tm::stopwords("English")
+  la <- lapply(book,function(where) {
+    sa <- sapply(sw,function(what) numwords(what,where))
+    ntot <- length(gregexpr('[[:blank:]]+',
+                            where,ignore.case=TRUE)[[1]])
+    sa/ntot
+  } )
+  mla <- t(do.call(cbind,la))
+}
+```
+##
+####Bag of words of the training data
+```{r, echo=TRUE}
+for(i in 1:length(tr_docs)){
+  assign(paste0("B",i), countwords(tr_docs[[i]]$content))
+}
+
+all <- rbind(B1,B2,B3,B4,B5,B6,B7,B8)
+```
+
+####Removing variables which have near zero variance over classes
+```{r, echo=TRUE}
+
+zvs <- nearZeroVar(all)
+all <- all[,-zvs]
+```
+
+##
+#### Defining the Categories
+```{r, echo=TRUE}
+Authors <-  factor(c(
+rep('Dick',nrow(B1)),
+rep('Doyle',nrow(B2)),
+rep('Doyle',nrow(B3)),
+rep('Harris',nrow(B4)),
+rep('Rowling',nrow(B5)),
+rep('Rowling',nrow(B6)),
+rep('Wells',nrow(B7)),
+rep('Wells',nrow(B8))
+),levels=c('Dick','Doyle', 'Harris', 'Rowling', 'Wells'))
+
+```
+#Test Data
+
+##
+###Testing Data
+
+- Mr. Spaceship by Philip K. Dick
+
+- The Hound of the Baskervilles by Arthur Conan Doyle
+
+- The Cuckoo's Calling by J.K. Rowling
+
+- The Silkworm by J.K. Rowling
+
+- Red Dragon by Thomas Harris
+
+- A Modern Utopia by H.G. Wells
+
+
+##
+#### Reading in the test data
+```{r, echo=TRUE}
+test <- Corpus(DirSource("/Users/Jaspreet/Documents/R_workspace/NLP/SciFi/test"))
+
+test <- tm_map(test, tolower)
+test <- tm_map(test, PlainTextDocument)
+```
+
+####Splitting into chapters
+```{r, echo=TRUE}
+for(i in 1:length(test)){
+test[[i]]$content <- paste(test[[i]]$content, collapse = " ")
+test[[i]]$content <- strsplit(test[[i]]$content, "(?: +\\*){5}| +chapter ?[a-z]* *")
+test[[i]]$content <- unlist(test[[i]]$content)
+test[[i]]$content <- as.list(test[[i]]$content)
+}
+```
+
+####Cleaning and Stemming the words
+```{r, echo=TRUE}
+test <- tm_map(test, removePunctuation)
+test <- tm_map(test, removeNumbers)
+test <- tm_map(test, removeWords, c("the", "a"))
+test <- tm_map(test, stripWhitespace)
+test <- tm_map(test, stemDocument)
+test <- tm_map(test, PlainTextDocument)
+
+for(i in 1:length(test)){
+  test[[i]]$content <- unlist(test[[i]]$content)
+  test[[i]]$content <- as.list(test[[i]]$content)
+}
+```
+
+##
+####Getting Bag of words from test
+```{r, echo=TRUE}
+
+for(i in 1:length(test)){
+  assign(paste0("Btest",i), countwords(test[[i]]$content))
+}
+
+B_test <- rbind(Btest1, Btest2, Btest3, Btest4, Btest5, Btest6)
+
+B_test <- B_test[,-zvs]
+```
+
+####Assigning true labels
+```{r, echo=TRUE}
+labels <-  factor(c(
+  rep('Dick',nrow(Btest1)),
+  rep('Doyle',nrow(Btest2)),
+  rep('Rowling',nrow(Btest3)),
+  rep('Rowling',nrow(Btest4)),
+  rep('Harris',nrow(Btest5)),
+  rep('Wells',nrow(Btest6))
+),levels=c('Dick','Doyle', 'Harris', 'Rowling', 'Wells'))
+
+```
+
+
+#Visualizing word frequencies
+##
+### Getting the wordcloud of a book
+```{r, echo=TRUE}
+book_cloud <- function(book) {
+B_tot <- colSums(book)
+freq <- sort(B_tot, decreasing = TRUE)
+dark2 <- brewer.pal(8, "Dark2")
+wordcloud(names(freq), freq, max.words = 100, rot.per=0.2, colors=dark2)
+}
+```
+
+##
+### Rowling 
+
+![wordcloud](./Rowling.jpeg)
+
+Most prominant words: you, he, his, she, had, that
+
+##
+### Wells
+
+![wordcloud](./Wells.jpeg)
+
+Most prominant words: my, me, I, but, in,
+
+# Now to train our models
+
+##
+####Random Forests
+
+- Combines many decision trees with random sampling of both variabels and instances.
+
+- Uses bootstraping to test models on leftover samples to estimate Out-of-Bag (OOB) error
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+rf1 <- randomForest(y=Authors,x=all,importance=TRUE, mtry = 2)
+rf1
+```
+
+##
+#### Naive Bayes
+
+- Probabilistic maximal likelihood classifiers that work well when number of features ~ number of instances
+- Naive because assumes independence between predictor variables
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+nb <- train(y=Authors, x=all, method = "nb")
+nb
+```
+
+##
+####Gradient boosting machine
+
+- While random forests rely on simple averages of weak classifiers, GBM uses weighted classifiers.
+
+- The learning procedure consecutively fits new models to provide a more accurate estimate of the response variable.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+gbm <- train(y=Authors, x=all, method = "gbm", verbose=FALSE)
+```
+
+##
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+gbm
+```
+
+# Results
+
+##
+###Accuracy with Random Forests
+```{r, echo=TRUE}
+pred_rf1 <- predict(rf1, B_test)
+results <- data.frame(Actual = labels, Predicted = pred_rf1)
+names(results) <- c("actual", "predicted")
+results.matrix <- confusionMatrix(results$predicted, results$actual)
+results.matrix$overall
+results.matrix$table
+```
+
+##
+###Accuracy with Random Forests
+```{r, echo=TRUE}
+results.matrix$byClass
+```
+
+##
+###Accuracy with Naive Bayes
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+pred_nb <- predict(nb, B_test)
+
+results <- data.frame(Actual = labels, Predicted = pred_nb)
+names(results) <- c("actual", "predicted")
+results.matrix <- confusionMatrix(results$predicted, results$actual)
+
+results.matrix$overall
+
+results.matrix$table
+```
+##
+###Accuracy with Naive Bayes
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+results.matrix$byClass
+```
+
+##
+###Accuracy with Gradient Boosting Machine
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+pred_gbm <- predict(gbm, B_test)
+results <- data.frame(Actual = labels, Predicted = pred_gbm)
+names(results) <- c("actual", "predicted")
+results.matrix <- confusionMatrix(results$predicted, results$actual)
+
+results.matrix$overall
+
+results.matrix$table
+```
+
+##
+###Accuracy with Gradient Boosting Machine
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+results.matrix$byClass
+```
+
+##
+### Box-whisker plots of the most relevant variables
+
+```{r, echo=TRUE}
+Imp <- importance(rf1)
+v2 <- rownames(Imp)[order(-Imp[,'MeanDecreaseGini'])][1:8]
+Imp_df <- as.data.frame(scale(all[,v2]))
+Imp_df$words <- rownames(Imp_df)
+Imp_df$authors <- Authors
+rownames(Imp_df) <- 1:nrow(Imp_df)
+propshow <- reshape(Imp_df,direction='long',
+timevar='Word',
+v.names='ScaledScore',
+times=v2,
+varying=list(v2))
+```
+
+##
+```{r, echo=TRUE}
+bwplot(authors ~ScaledScore  | Word,data=propshow)
+```
+
+##
+###References
+- [Rowling and "Galbraith": an authorial analysis](http://languagelog.ldc.upenn.edu/nll/?p=5315)
+- [Common words in the Gathering Storm](http://wiekvoet.blogspot.ch/2012/12/common-words-in-gathering-storm.html)
